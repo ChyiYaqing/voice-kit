@@ -1,0 +1,25 @@
+[Unit]
+Description=AI Voice Assistant (AIY Voice Kit V1)
+After=network-online.target sound.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=chyiyaqing
+WorkingDirectory=/home/chyiyaqing/chyi/voice-kit
+ExecStart=/home/chyiyaqing/chyi/voice-kit/.venv/bin/python3 assistant.py
+Restart=on-failure
+RestartSec=5
+
+# GPIO / audio access
+SupplementaryGroups=gpio audio spi i2c
+
+# Use lgpio backend — compatible with Linux 6.12 kernel (RPi.GPIO 0.7.1 is broken)
+Environment="GPIOZERO_PIN_FACTORY=lgpio"
+Environment="PYTHONUNBUFFERED=1"
+
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
