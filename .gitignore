@@ -5,3 +5,5 @@ __pycache__/
 *.pyc
 vosk-model/
 vosk-model-en-backup/
+memory/
+!memory/.gitkeep

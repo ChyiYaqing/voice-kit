@@ -54,3 +54,34 @@ LED_PIN    = int(os.environ.get("LED_PIN",    "25"))
 
 # ─── Vosk model ──────────────────────────────────────────────────────────────
 VOSK_MODEL_DIR = os.path.join(os.path.dirname(__file__), "vosk-model")
+
+# ─── Memory / persistence ────────────────────────────────────────────────────
+from pathlib import Path
+
+MEMORY_DIR = Path(os.environ.get(
+    "MEMORY_DIR",
+    os.path.join(os.path.dirname(__file__), "memory")
+))
+MEMORY_ENABLED = os.environ.get("MEMORY_ENABLED", "true").lower() == "true"
+
+# History limits (Pi 3B: 1GB RAM — stay conservative)
+MAX_HISTORY_MESSAGES = int(os.environ.get("MAX_HISTORY_MESSAGES", "50"))
+HISTORY_ROTATION_THRESHOLD = int(os.environ.get("HISTORY_ROTATION_THRESHOLD", "2000"))
+
+# Memory update marker (LLM output trigger)
+MEMORY_UPDATE_MARKER = os.environ.get("MEMORY_UPDATE_MARKER", "[UPDATE_MEMORY]")
+
+# Bootstrap system (OpenClaw-inspired) ────────────────────────────────────────
+# Enable Bootstrap injection (SOUL.md, IDENTITY.md, USER.md)
+BOOTSTRAP_ENABLED = os.environ.get("BOOTSTRAP_ENABLED", "true").lower() == "true"
+
+# Max chars per Bootstrap file (prevent context overflow)
+BOOTSTRAP_MAX_CHARS = int(os.environ.get("BOOTSTRAP_MAX_CHARS", "20000"))
+
+# Total max chars for all Bootstrap files combined
+BOOTSTRAP_TOTAL_MAX_CHARS = int(os.environ.get("BOOTSTRAP_TOTAL_MAX_CHARS", "150000"))
+
+# Bootstrap update markers (for LLM to modify Bootstrap files)
+SOUL_UPDATE_MARKER = os.environ.get("SOUL_UPDATE_MARKER", "[UPDATE_SOUL]")
+IDENTITY_UPDATE_MARKER = os.environ.get("IDENTITY_UPDATE_MARKER", "[UPDATE_IDENTITY]")
+USER_UPDATE_MARKER = os.environ.get("USER_UPDATE_MARKER", "[UPDATE_USER]")
