@@ -2,7 +2,7 @@
 """
 AI Voice Assistant — AIY Voice Kit V1 + Ollama (Mac Mini M4)
 
-Flow: hold button → record → Vosk STT → Ollama LLM → espeak-ng TTS → play
+Flow: hold button → record → sherpa-onnx STT → Ollama LLM → edge-tts TTS → play
 LED:  idle=off  recording=on  processing=fast-blink  speaking=slow-blink
 """
 
@@ -17,10 +17,11 @@ import tempfile
 import threading
 import time
 
+import numpy as np
 import edge_tts
 import requests
+import sherpa_onnx
 from gpiozero import Button, PWMLED
-from vosk import KaldiRecognizer, Model
 
 import config
 from memory_store import MemoryStore
@@ -72,15 +73,14 @@ class StatusLED:
 
 # ─── Audio ────────────────────────────────────────────────────────────────────
 
-def record_and_transcribe(button: Button, model: Model) -> str:
+def record_and_transcribe(button: Button, recognizer: sherpa_onnx.OnlineRecognizer) -> str:
     """
     Record audio while button is held AND transcribe concurrently.
-    arecord pipes raw PCM to stdout; Vosk processes each chunk as it arrives.
+    arecord pipes raw PCM to stdout; sherpa-onnx processes each chunk as it arrives.
     By the time the button is released, most audio is already recognised.
     No temporary WAV file needed.
     """
-    rec = KaldiRecognizer(model, config.SAMPLE_RATE)
-    rec.SetWords(False)
+    stream = recognizer.create_stream()
 
     cmd = [
         "arecord",
@@ -88,6 +88,7 @@ def record_and_transcribe(button: Button, model: Model) -> str:
         "-f", config.SAMPLE_FORMAT,
         "-r", str(config.SAMPLE_RATE),
         "-c", str(config.CHANNELS),
+        "--buffer-size=512",   # 32ms ALSA period — lower capture latency
         "-",   # raw PCM to stdout (no WAV header)
     ]
     proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
@@ -100,18 +101,27 @@ def record_and_transcribe(button: Button, model: Model) -> str:
     t = threading.Thread(target=_stopper, daemon=True)
     t.start()
 
-    # Main: read PCM chunks and feed to Vosk while recording
+    # Main: read PCM chunks and feed to sherpa-onnx while recording
     while True:
-        data = proc.stdout.read(8000)   # blocks until data or EOF after terminate()
+        data = proc.stdout.read(4000)   # 0.125s chunks — more responsive partial results
         if not data:
             break
-        rec.AcceptWaveform(data)
+        samples = np.frombuffer(data, dtype=np.int16).astype(np.float32) / 32768.0
+        stream.accept_waveform(config.SAMPLE_RATE, samples)
+        while recognizer.is_ready(stream):
+            recognizer.decode_stream(stream)
 
     proc.wait()
     t.join()
 
-    result = json.loads(rec.FinalResult())
-    return result.get("text", "").strip()
+    # Flush zipformer right-context (~40ms); 0.1s is ample
+    tail = np.zeros(int(0.1 * config.SAMPLE_RATE), dtype=np.float32)
+    stream.accept_waveform(config.SAMPLE_RATE, tail)
+    stream.input_finished()
+    while recognizer.is_ready(stream):
+        recognizer.decode_stream(stream)
+
+    return recognizer.get_result(stream).strip()
 
 
 # ─── LLM ─────────────────────────────────────────────────────────────────────
@@ -580,12 +590,21 @@ def build_system_prompt(soul: str = "", identity: str = "", user: str = "", memo
 # ─── Main ─────────────────────────────────────────────────────────────────────
 
 def main():
-    print("Loading Vosk model …")
-    if not os.path.isdir(config.VOSK_MODEL_DIR):
-        print(f"ERROR: Vosk model not found at {config.VOSK_MODEL_DIR}")
+    print("Loading sherpa-onnx model …")
+    if not os.path.isdir(config.SHERPA_MODEL_DIR):
+        print(f"ERROR: sherpa-onnx model not found at {config.SHERPA_MODEL_DIR}")
         print("Run setup.sh first.")
         sys.exit(1)
-    vosk_model = Model(config.VOSK_MODEL_DIR)
+    recognizer = sherpa_onnx.OnlineRecognizer.from_transducer(
+        tokens=os.path.join(config.SHERPA_MODEL_DIR, "tokens.txt"),
+        encoder=os.path.join(config.SHERPA_MODEL_DIR, config.SHERPA_ENCODER),
+        decoder=os.path.join(config.SHERPA_MODEL_DIR, config.SHERPA_DECODER),
+        joiner=os.path.join(config.SHERPA_MODEL_DIR, config.SHERPA_JOINER),
+        num_threads=2,
+        sample_rate=config.SAMPLE_RATE,
+        feature_dim=80,
+        decoding_method="greedy_search",
+    )
 
     button = Button(config.BUTTON_PIN, pull_up=True)
     led    = StatusLED(config.LED_PIN)
@@ -683,7 +702,7 @@ def main():
         led.on()
         print("[recording + transcribing]")
         t0 = time.time()
-        user_text = record_and_transcribe(button, vosk_model)
+        user_text = record_and_transcribe(button, recognizer)
         print(f"[transcribing done] {time.time()-t0:.1f}s")
 
         if not user_text:

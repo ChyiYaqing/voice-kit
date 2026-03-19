@@ -19,24 +19,25 @@ source "$SCRIPT_DIR/.venv/bin/activate"
 
 pip install --upgrade pip -q
 pip install -q \
-    vosk \
+    sherpa-onnx \
+    numpy \
     requests \
     gpiozero \
     RPi.GPIO
 
-echo "=== 3. Download Vosk small English model (~40 MB) ==="
-MODEL_DIR="$SCRIPT_DIR/vosk-model"
+echo "=== 3. Download sherpa-onnx streaming-zipformer-zh-14M (~25 MB) ==="
+MODEL_DIR="$SCRIPT_DIR/sherpa-model"
 if [ ! -d "$MODEL_DIR" ]; then
     TMP=$(mktemp -d)
     wget -q --show-progress \
-        "https://alphacephei.com/vosk/models/vosk-model-small-en-us-0.15.zip" \
-        -O "$TMP/model.zip"
-    unzip -q "$TMP/model.zip" -d "$TMP"
-    mv "$TMP"/vosk-model-small-en-us-0.15 "$MODEL_DIR"
+        "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-streaming-zipformer-zh-14M-2023-02-23.tar.bz2" \
+        -O "$TMP/model.tar.bz2"
+    tar xf "$TMP/model.tar.bz2" -C "$TMP"
+    mv "$TMP/sherpa-onnx-streaming-zipformer-zh-14M-2023-02-23" "$MODEL_DIR"
     rm -rf "$TMP"
-    echo "Vosk model saved to $MODEL_DIR"
+    echo "sherpa-onnx model saved to $MODEL_DIR"
 else
-    echo "Vosk model already present — skipping."
+    echo "sherpa-onnx model already present — skipping."
 fi
 
 echo ""

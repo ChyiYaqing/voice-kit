@@ -52,8 +52,12 @@ TTS_VOLUME = os.environ.get("TTS_VOLUME", "-90%")
 BUTTON_PIN = int(os.environ.get("BUTTON_PIN", "23"))
 LED_PIN    = int(os.environ.get("LED_PIN",    "25"))
 
-# ─── Vosk model ──────────────────────────────────────────────────────────────
-VOSK_MODEL_DIR = os.path.join(os.path.dirname(__file__), "vosk-model")
+# ─── sherpa-onnx STT model (streaming zipformer-bilingual-zh-en) ─────────────
+SHERPA_MODEL_DIR = os.path.join(os.path.dirname(__file__), "sherpa-model")
+SHERPA_ENCODER = os.environ.get("SHERPA_ENCODER", "encoder-epoch-99-avg-1.int8.onnx")
+SHERPA_DECODER = os.environ.get("SHERPA_DECODER", "decoder-epoch-99-avg-1.int8.onnx")
+SHERPA_JOINER  = os.environ.get("SHERPA_JOINER",  "joiner-epoch-99-avg-1.int8.onnx")
+SHERPA_BPE     = os.environ.get("SHERPA_BPE",     "bpe.model")  # bilingual BPE tokenizer
 
 # ─── Memory / persistence ────────────────────────────────────────────────────
 from pathlib import Path

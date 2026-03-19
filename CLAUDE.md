@@ -3,7 +3,7 @@
 ## Project Overview
 
 Raspberry Pi 3B + AIY Google Voice Kit V1 voice assistant.
-STT: Vosk (offline). LLM: Ollama on remote Mac Mini M4. TTS: edge-tts (Microsoft neural, Chinese female).
+STT: sherpa-onnx (offline, streaming-zipformer-bilingual-zh-en-2023-02-20, int8). LLM: Ollama on remote Mac Mini M4. TTS: edge-tts (Microsoft neural, Chinese female).
 
 ## Key Files
 
@@ -11,8 +11,7 @@ STT: Vosk (offline). LLM: Ollama on remote Mac Mini M4. TTS: edge-tts (Microsoft
 - `config.py`    — all tuneable parameters and credentials
 - `setup.sh`     — one-shot install script
 - `voice-assistant.service` — systemd unit file (deployed to `/etc/systemd/system/`)
-- `vosk-model/`  — Vosk `small-cn-0.22` model (Mandarin Chinese, do not delete)
-- `vosk-model-en-backup/` — original `small-en-us` backup
+- `sherpa-model/` — sherpa-onnx `streaming-zipformer-bilingual-zh-en-2023-02-20` model (int8, Mandarin + English, do not delete)
 
 ## Hardware
 
@@ -45,7 +44,7 @@ STT: Vosk (offline). LLM: Ollama on remote Mac Mini M4. TTS: edge-tts (Microsoft
 ## Python Environment
 
 - Venv: `.venv/` (Python 3.13)
-- Key packages: `vosk`, `requests`, `gpiozero`, `edge-tts`
+- Key packages: `sherpa-onnx`, `numpy`, `requests`, `gpiozero`, `edge-tts`
 - Activate: `source .venv/bin/activate`
 - **RPi.GPIO**: do NOT use pip's `RPi.GPIO` (0.7.1 — broken on Linux 6.12+). Instead, symlink
   system's `python3-rpi-lgpio` (0.7.2) into the venv:
@@ -70,9 +69,11 @@ STT: Vosk (offline). LLM: Ollama on remote Mac Mini M4. TTS: edge-tts (Microsoft
 ## Development Notes
 
 - Pi 3B is ARM64 (aarch64), 1 GB RAM — keep dependencies lightweight
-- Vosk `small-cn-0.22` model (Mandarin Chinese); do not use `large` model on this hardware
-- English backup at `vosk-model-en-backup/`; to switch back: `mv vosk-model vosk-model-cn && mv vosk-model-en-backup vosk-model`
-- Vosk chunk size: `8000` bytes (0.25s/chunk) — balance between loop overhead and Pi 3B memory pressure
+- sherpa-onnx model: `streaming-zipformer-bilingual-zh-en-2023-02-20` (int8, encoder ~174 MB, total ~190 MB RAM); supports Chinese + English mixed input
+- Model load time on Pi 3B: ~75s at startup (encoder size); do not use models >200 MB
+- STT chunk size: `4000` bytes (0.125s/chunk at 16kHz S16_LE) — converted to float32 before feeding to sherpa-onnx
+- sherpa-onnx outputs word-level tokens, correctly handles compounds (苹果公司) and English words (iPhone, IPHONE)
+- `bpe.model` is present in sherpa-model/ but not passed to recognizer (greedy_search uses tokens.txt directly)
 - aplay must use `-D plughw:sndrpigooglevoi,0` — default ALSA routing is unreliable due to conflicting card index in `/etc/asound.conf`
 - Conversation history now persisted to disk (see Memory System below)
 - ffmpeg is available at `/usr/bin/ffmpeg` (system package)
