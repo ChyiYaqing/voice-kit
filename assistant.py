@@ -25,6 +25,7 @@ from gpiozero import Button, PWMLED
 
 import config
 from memory_store import MemoryStore
+import tools
 
 
 # ─── LED helpers ─────────────────────────────────────────────────────────────
@@ -610,6 +611,7 @@ def main():
     led    = StatusLED(config.LED_PIN)
 
     history: list = []   # conversation history for multi-turn context
+    user_city: str = config.USER_CITY  # for weather queries
 
     # ── Initialize memory store ────────────────────────────────────────────
     memory_store = None
@@ -650,6 +652,12 @@ def main():
 
                 # Build system prompt from Bootstrap files
                 system_prompt = build_system_prompt(soul, identity, user, memory_content)
+
+                # Extract user city from USER.md for weather tool
+                city_from_profile = tools.extract_city_from_user_profile(user)
+                if city_from_profile:
+                    user_city = city_from_profile
+                    print(f"[tools] User city from USER.md: {user_city}")
 
                 # Calculate total size
                 total_size = len(soul) + len(identity) + len(user) + len(memory_content)
@@ -712,12 +720,17 @@ def main():
 
         print(f"You : {user_text}")
 
+        # ── Tool enrichment (time / weather) ──────────────────────────────
+        llm_input = tools.enrich_query(user_text, user_city)
+        if llm_input != user_text:
+            print(f"[tools] Injected real-time context")
+
         # ── LLM + TTS (streamed, sentence-by-sentence) ────────────────────
         led.blink(0.3, 0.3)
         print(f"[querying {provider} + speaking]")
         t0 = time.time()
         try:
-            speak_streaming(stream_llm(user_text, history, memory_store, system_prompt))
+            speak_streaming(stream_llm(llm_input, history, memory_store, system_prompt))
         except requests.exceptions.RequestException as e:
             print(f"[error] Ollama: {e}")
             try:

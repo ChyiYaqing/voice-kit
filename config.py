@@ -34,6 +34,13 @@ SYSTEM_PROMPT = (
     "如果问题太宽泛，简单说一句概括，再问用户想了解哪方面。"
 )
 
+# ─── Tools (real-time data) ──────────────────────────────────────────────────
+# User's city for weather queries (also auto-parsed from USER.md if set there)
+USER_CITY = os.environ.get("USER_CITY", "")
+
+# Timeout (seconds) for weather API calls
+WEATHER_TIMEOUT = int(os.environ.get("WEATHER_TIMEOUT", "5"))
+
 # ─── Audio ───────────────────────────────────────────────────────────────────
 # AIY Voice Kit V1 — card name stays stable across reboots
 ALSA_CARD   = "sndrpigooglevoi"
