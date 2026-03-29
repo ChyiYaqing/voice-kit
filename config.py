@@ -7,7 +7,7 @@ from dotenv import load_dotenv
 # Load .env from project root (silently ignored if absent)
 load_dotenv(Path(__file__).parent / ".env")
 
-# ─── LLM provider: "ollama" or "deepseek" ────────────────────────────────────
+# ─── LLM provider: "ollama", "deepseek", or "claude" ────────────────────────
 LLM_PROVIDER = os.environ.get("LLM_PROVIDER", "ollama")
 
 # ─── Ollama (Mac Mini M4) ────────────────────────────────────────────────────
@@ -22,6 +22,26 @@ DEEPSEEK_API_KEY = os.environ.get("DEEPSEEK_API_KEY", "")
 DEEPSEEK_HOST    = os.environ.get("DEEPSEEK_HOST",    "https://api.deepseek.com")
 DEEPSEEK_MODEL   = os.environ.get("DEEPSEEK_MODEL",   "deepseek-chat")
 DEEPSEEK_TIMEOUT = int(os.environ.get("DEEPSEEK_TIMEOUT", "60"))
+
+# ─── Anthropic Claude API ─────────────────────────────────────────────────────
+# Auth priority (highest to lowest):
+#   1. OAuth token from credentials/auth-profiles.json (recommended)
+#   2. ANTHROPIC_API_KEY environment variable (fallback)
+#
+# OAuth credentials file format (same as OpenClaw):
+#   { "anthropic:claude-cli": {"type":"oauth","provider":"anthropic","token":"sk-ant-oau04-..."} }
+# Copy credentials/auth-profiles.json.example → credentials/auth-profiles.json and fill in token.
+# The credentials/ directory is gitignored — never commit real tokens.
+ANTHROPIC_API_KEY    = os.environ.get("ANTHROPIC_API_KEY",    "")
+ANTHROPIC_HOST       = os.environ.get("ANTHROPIC_HOST",       "https://api.anthropic.com")
+ANTHROPIC_MODEL      = os.environ.get("ANTHROPIC_MODEL",      "claude-sonnet-4-6")
+ANTHROPIC_MAX_TOKENS = int(os.environ.get("ANTHROPIC_MAX_TOKENS", "1024"))
+ANTHROPIC_TIMEOUT    = int(os.environ.get("ANTHROPIC_TIMEOUT", "60"))
+# Path to OAuth credentials file (gitignored; override via env var if needed)
+ANTHROPIC_OAUTH_CREDENTIALS = os.environ.get(
+    "ANTHROPIC_OAUTH_CREDENTIALS",
+    os.path.join(os.path.dirname(__file__), "credentials", "auth-profiles.json")
+)
 
 SYSTEM_PROMPT = (
     "你是树莓派上的语音助手，说话简短自然，像朋友聊天一样。"

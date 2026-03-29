@@ -40,7 +40,14 @@
       "Bash(unzip:*)",
       "WebFetch(domain:github.com)",
       "Bash(git init:*)",
-      "Bash(git add:*)"
+      "Bash(git add:*)",
+      "WebFetch(domain:pypi.org)",
+      "WebFetch(domain:k2-fsa.github.io)",
+      "WebFetch(domain:hf-mirror.com)",
+      "Bash(git push:*)",
+      "Bash(printenv CLAUDE_CODE_OAUTH_TOKEN)",
+      "Bash(python3 -c \":*)",
+      "Bash(pip install:*)"
     ]
   }
 }

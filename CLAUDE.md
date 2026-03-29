@@ -9,6 +9,7 @@ STT: sherpa-onnx (offline, streaming-zipformer-bilingual-zh-en-2023-02-20, int8)
 
 - `assistant.py` — main loop (record → STT → LLM → TTS)
 - `config.py`    — all tuneable parameters and credentials
+- `tools.py`     — real-time tool injection (time + weather) called before LLM
 - `setup.sh`     — one-shot install script
 - `voice-assistant.service` — systemd unit file (deployed to `/etc/systemd/system/`)
 - `sherpa-model/` — sherpa-onnx `streaming-zipformer-bilingual-zh-en-2023-02-20` model (int8, Mandarin + English, do not delete)
@@ -28,13 +29,30 @@ STT: sherpa-onnx (offline, streaming-zipformer-bilingual-zh-en-2023-02-20, int8)
 - Endpoint used: `POST /api/chat` (OpenAI-compatible messages format)
 - Available models: `gemma3:4b`, `gemma3:12b`, `deepseek-r1:7b`, `qwen3:latest`
 
+## Anthropic Claude API
+
+- Base URL: `https://api.anthropic.com`
+- Auth (priority order):
+  1. **OAuth token** (recommended): `Authorization: Bearer sk-ant-oau04-...` — loaded from `credentials/auth-profiles.json` (OpenClaw format, gitignored)
+  2. **API key** (fallback): `x-api-key: sk-ant-api03-...` — from `ANTHROPIC_API_KEY` in `.env`
+- OAuth credentials file: `credentials/auth-profiles.json` — copy from `credentials/auth-profiles.json.example`, fill in token; **never commit real tokens**
+- `_load_claude_oauth_token()` reads `"anthropic:claude-cli"` profile; skips placeholder tokens
+- Default model: `claude-sonnet-4-6`
+- Endpoint: `POST /v1/messages` with SSE streaming (`anthropic-version: 2023-06-01`)
+- System prompt passed as top-level `system` param (not in messages array)
+- Stream events: parse `content_block_delta` → `delta.type == "text_delta"` → `delta.text`
+- No extra SDK needed — implemented with `requests` directly
+- Fallback: errors automatically fall back to Ollama (same as DeepSeek)
+
 ## TTS (edge-tts)
 
 - Voice: `zh-CN-XiaoxiaoNeural` (Mandarin Chinese female, Microsoft neural)
 - Pipeline: **3-stage threaded**:
   - Thread 1: LLM stream → sentence splitter → `sentence_q`
   - Thread 2: `sentence_q` → edge-tts + ffmpeg → `wav_q` (synthesises next while current plays)
-  - Main thread: `wav_q` → aplay
+  - Main thread: `wav_q` → aplay (via `Popen`; killed immediately on interrupt)
+- **Interrupt**: button press during playback detected by polling thread (`_watch_button`, checks `button.is_pressed` every 50ms) → sets `interrupt` event → aplay killed within 50ms → LLM/synth threads wind down via `_stop` event → returns to recording immediately
+- **Why polling not `when_pressed`**: lgpio edge-detection gets unreliable after multiple rapid interrupt/record cycles; polling `button.is_pressed` is always stable
 - Sentence boundaries: `。！？!?.` and `，` (when followed by 20+ chars)
 - Markdown stripped before TTS (`* # `` _ ~ > [ ] ( )`)
 - Requires internet (same as Ollama)
@@ -80,6 +98,40 @@ STT: sherpa-onnx (offline, streaming-zipformer-bilingual-zh-en-2023-02-20, int8)
 - Linux 6.12+ broke RPi.GPIO 0.7.1 edge detection — always use `python3-rpi-lgpio` (system apt) + `GPIOZERO_PIN_FACTORY=lgpio`
 - System prompt enforces 1-3 sentence replies and no markdown — model (gemma3:4b) tends to produce bullet lists without this constraint
 - LLM uses `stream: true` so first sentence reaches TTS ~2-3s after query, before full response is ready
+- `speak_streaming()` returns `bool` (True=completed, False=interrupted); `main()` uses `skip_wait` flag to bypass `wait_for_press()` when interrupt triggers new recording
+- `_watch_button` polling thread is started just before TTS phase; stopped via `_tts_stop` event in `finally` block after `speak_streaming` returns
+- DeepSeek and Claude HTTP errors are caught in `stream_llm()` and automatically fall back to Ollama — service never crashes on API errors; error body (first 500 chars) is printed to stdout for diagnosis
+- `_stream_deepseek()` and `_stream_claude()` both use `if not resp.ok` + `raise RuntimeError` instead of `resp.raise_for_status()` so the response body is logged before raising
+- Three LLM providers: `ollama` (default), `deepseek`, `claude` — set via `LLM_PROVIDER` in `.env`
+- `_stream_claude()` uses Anthropic Messages API SSE directly via `requests`; tries OAuth Bearer token first (via `_load_claude_oauth_token()`), falls back to API key; parses `content_block_delta` events
+
+## Real-Time Tool Injection
+
+Implemented in `tools.py`. Before passing user text to the LLM, `enrich_query()` detects intent and prepends a `[实时数据]` context block — no second LLM call needed.
+
+**Tools:**
+- **Time**: `get_current_time()` — Chinese-formatted datetime (e.g. `2026年03月29日 星期日 14:30:00`)
+- **Weather**: `get_weather(city)` — fetches via `wttr.in/{city}?format=3&lang=zh` (no API key); timeout controlled by `WEATHER_TIMEOUT`
+
+**Intent detection keywords:**
+- Time: `几点 时间 现在多少点 几时 what time today 今天几号 星期几` etc.
+- Weather: `天气 weather 下雨 下雪 温度 气温 冷不冷 需要带伞` etc.
+
+**City resolution** (priority order):
+1. `USER.md` — parsed by `extract_city_from_user_profile()` via regex `城市|city|所在城市|location`
+2. `config.USER_CITY` — set via `USER_CITY` env var in `.env`
+3. Empty string → returns `"未配置城市，无法查询天气"`
+
+**Config (.env):**
+```bash
+USER_CITY=上海        # User's city for weather queries
+WEATHER_TIMEOUT=5     # Seconds before weather API times out
+```
+
+**Integration in `assistant.py`:**
+- `user_city` extracted from USER.md profile at startup (updated each interaction if profile changes)
+- `tools.enrich_query(user_text, user_city)` called after STT, before `stream_llm()`
+- If enriched, prints `[tools] Injected real-time context` to stdout
 
 ## Bootstrap + Memory System
 

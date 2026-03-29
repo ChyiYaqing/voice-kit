@@ -180,7 +180,10 @@ def _stream_deepseek(history: list, system_prompt: str = None):
         timeout=config.DEEPSEEK_TIMEOUT,
         stream=True,
     )
-    resp.raise_for_status()
+    if not resp.ok:
+        body = resp.text[:500]
+        print(f"[DeepSeek] HTTP {resp.status_code}: {body}", flush=True)
+        raise RuntimeError(f"DeepSeek {resp.status_code}: {body}")
 
     for line in resp.iter_lines():
         if not line:
@@ -197,7 +200,91 @@ def _stream_deepseek(history: list, system_prompt: str = None):
             yield chunk
 
 
-def stream_llm(user_text: str, history: list, memory_store: MemoryStore = None, system_prompt: str = None):
+def _load_claude_oauth_token() -> str:
+    """Load OAuth bearer token from credentials/auth-profiles.json (OpenClaw format).
+
+    Returns token string if found and valid, empty string otherwise.
+    """
+    try:
+        path = os.path.expanduser(config.ANTHROPIC_OAUTH_CREDENTIALS)
+        if not os.path.exists(path):
+            return ""
+        with open(path) as f:
+            profiles = json.load(f)
+        profile = profiles.get("anthropic:claude-cli", {})
+        if profile.get("type") == "oauth" and profile.get("provider") == "anthropic":
+            token = profile.get("token", "")
+            if token and not token.startswith("sk-ant-oau04-YOUR_"):
+                return token
+    except Exception as e:
+        print(f"[claude] OAuth credentials load error: {e}", flush=True)
+    return ""
+
+
+def _stream_claude(history: list, system_prompt: str = None):
+    """Stream from Anthropic Claude API (SSE); yield text chunks.
+
+    Auth: OAuth bearer token (credentials/auth-profiles.json) preferred;
+    falls back to ANTHROPIC_API_KEY if OAuth token not available.
+    """
+    sys_prompt = system_prompt if system_prompt is not None else config.SYSTEM_PROMPT
+    # Claude API: system is a top-level param, messages must be user/assistant only
+    messages = [m for m in history if m["role"] in ("user", "assistant") and m.get("content")]
+
+    oauth_token = _load_claude_oauth_token()
+    if oauth_token:
+        headers = {
+            "Authorization": f"Bearer {oauth_token}",
+            "anthropic-version": "2023-06-01",
+            "Content-Type": "application/json",
+        }
+        print("[claude] Using OAuth token auth", flush=True)
+    else:
+        headers = {
+            "x-api-key": config.ANTHROPIC_API_KEY,
+            "anthropic-version": "2023-06-01",
+            "Content-Type": "application/json",
+        }
+    payload = {
+        "model": config.ANTHROPIC_MODEL,
+        "max_tokens": config.ANTHROPIC_MAX_TOKENS,
+        "system": sys_prompt,
+        "messages": messages,
+        "stream": True,
+    }
+    resp = requests.post(
+        f"{config.ANTHROPIC_HOST}/v1/messages",
+        json=payload,
+        headers=headers,
+        timeout=config.ANTHROPIC_TIMEOUT,
+        stream=True,
+    )
+    if not resp.ok:
+        body = resp.text[:500]
+        print(f"[Claude] HTTP {resp.status_code}: {body}", flush=True)
+        raise RuntimeError(f"Claude {resp.status_code}: {body}")
+
+    for line in resp.iter_lines():
+        if not line:
+            continue
+        text = line.decode("utf-8") if isinstance(line, bytes) else line
+        if not text.startswith("data:"):
+            continue
+        data_str = text[5:].strip()
+        try:
+            data = json.loads(data_str)
+        except json.JSONDecodeError:
+            continue
+        if data.get("type") == "content_block_delta":
+            delta = data.get("delta", {})
+            if delta.get("type") == "text_delta":
+                chunk = delta.get("text", "")
+                if chunk:
+                    yield chunk
+
+
+def stream_llm(user_text: str, history: list, memory_store: MemoryStore = None,
+               system_prompt: str = None, interrupt: threading.Event = None):
     """Dispatch to the configured LLM provider; yield chunks; update history.
 
     Args:
@@ -205,6 +292,7 @@ def stream_llm(user_text: str, history: list, memory_store: MemoryStore = None, 
         history: Conversation history (modified in-place)
         memory_store: Optional MemoryStore instance for persistence
         system_prompt: Optional custom system prompt (uses config.SYSTEM_PROMPT if None)
+        interrupt: Optional event; when set, stops yielding early
     """
     history.append({"role": "user", "content": user_text})
 
@@ -219,10 +307,13 @@ def stream_llm(user_text: str, history: list, memory_store: MemoryStore = None, 
     provider = config.LLM_PROVIDER.lower()
     if provider == "deepseek":
         gen = _stream_deepseek(history, system_prompt)
+    elif provider == "claude":
+        gen = _stream_claude(history, system_prompt)
     else:
         gen = _stream_ollama(history, system_prompt)
 
     full_text = ""
+    _gen_provider = provider
     bootstrap_updates = {
         'memory': [],
         'user': [],
@@ -230,9 +321,23 @@ def stream_llm(user_text: str, history: list, memory_store: MemoryStore = None, 
         'soul': []
     }  # Collect Bootstrap update markers
 
-    for chunk in gen:
-        full_text += chunk
-        yield chunk
+    try:
+        for chunk in gen:
+            if interrupt and interrupt.is_set():
+                break
+            full_text += chunk
+            yield chunk
+    except Exception as e:
+        print(f"[LLM] {_gen_provider} error: {e}", flush=True)
+        if _gen_provider in ("deepseek", "claude"):
+            print(f"[LLM] Falling back to Ollama", flush=True)
+            fallback_history = history[:-1]  # remove user msg already appended
+            for chunk in _stream_ollama(fallback_history + [{"role": "user", "content": user_text}], system_prompt):
+                full_text += chunk
+                yield chunk
+        else:
+            yield "抱歉，LLM 服务暂时不可用，请稍后再试。"
+            full_text = "抱歉，LLM 服务暂时不可用，请稍后再试。"
 
     # Extract Bootstrap updates (OpenClaw-inspired)
     if memory_store:
@@ -447,46 +552,73 @@ def _synth_to_wav(text: str) -> str:
         os.unlink(mp3.name)
 
 
-def speak_streaming(text_stream):
+def speak_streaming(text_stream, interrupt: threading.Event = None):
     """
     3-stage pipeline:
       Thread-1 (LLM reader)  : reads stream → splits sentences → sentence_q
       Thread-2 (synthesiser) : sentence_q  → edge-tts+ffmpeg → wav_q
       Main thread (player)   : wav_q       → aplay (plays while next is synthesising)
+
+    Returns True if completed normally, False if interrupted by button press.
     """
     sentence_q: _queue.Queue = _queue.Queue(maxsize=4)
     wav_q:      _queue.Queue = _queue.Queue(maxsize=2)
+    _stop = threading.Event()  # signals threads to wind down on interrupt
 
     # ── Thread 1: LLM → sentences ────────────────────────────────────────────
     def llm_reader():
         buf = ""
-        for chunk in text_stream:
-            buf += chunk
-            while True:
-                m = _SENTENCE_END.search(buf)
-                if not m:
+        try:
+            for chunk in text_stream:
+                if _stop.is_set():
                     break
-                sentence = _MARKDOWN.sub("", buf[:m.end()]).strip()
-                buf = buf[m.end():]
-                if sentence:
-                    sentence_q.put(sentence)
-        tail = _MARKDOWN.sub("", buf).strip()
-        if tail:
-            sentence_q.put(tail)
-        sentence_q.put(None)  # sentinel
+                buf += chunk
+                while True:
+                    m = _SENTENCE_END.search(buf)
+                    if not m:
+                        break
+                    sentence = _MARKDOWN.sub("", buf[:m.end()]).strip()
+                    buf = buf[m.end():]
+                    if sentence:
+                        sentence_q.put(sentence)
+        finally:
+            if not _stop.is_set():
+                tail = _MARKDOWN.sub("", buf).strip()
+                if tail:
+                    sentence_q.put(tail)
+            sentence_q.put(None)  # sentinel (always)
 
     # ── Thread 2: sentences → WAV files ──────────────────────────────────────
     def synthesiser():
         while True:
-            sentence = sentence_q.get()
+            try:
+                sentence = sentence_q.get(timeout=0.5)
+            except _queue.Empty:
+                if _stop.is_set():
+                    break
+                continue
             if sentence is None:
-                wav_q.put(None)
                 break
+            if _stop.is_set():
+                continue  # drain without synthesising
             try:
                 wav_path = _synth_to_wav(sentence)
-                wav_q.put((sentence, wav_path))
+                if _stop.is_set():
+                    os.unlink(wav_path)
+                else:
+                    wav_q.put((sentence, wav_path))
             except Exception as e:
                 print(f"\n[error] TTS synth: {e}")
+        # Keep retrying until sentinel lands or player already exited (_stop).
+        # A timeout=1 was silently dropping the sentinel when the player was
+        # mid-sentence (3-10s), leaving the player loop spinning forever.
+        while True:
+            try:
+                wav_q.put(None, timeout=0.5)
+                break
+            except _queue.Full:
+                if _stop.is_set():
+                    break  # player already exited due to interrupt, no need
 
     t1 = threading.Thread(target=llm_reader,  daemon=True)
     t2 = threading.Thread(target=synthesiser, daemon=True)
@@ -495,10 +627,21 @@ def speak_streaming(text_stream):
 
     # ── Main: play WAV files as they arrive ──────────────────────────────────
     first = True
+    interrupted = False
+
     while True:
-        item = wav_q.get()
+        try:
+            item = wav_q.get(timeout=0.1)
+        except _queue.Empty:
+            if interrupt and interrupt.is_set():
+                interrupted = True
+                _stop.set()
+                break
+            continue
+
         if item is None:
             break
+
         sentence, wav_path = item
         try:
             if first:
@@ -506,16 +649,51 @@ def speak_streaming(text_stream):
                 first = False
             else:
                 print(f" {sentence}", end="", flush=True)
-            subprocess.run(
-                ["aplay", "-D", config.ALSA_DEVICE, wav_path],
-                check=True, stderr=subprocess.DEVNULL,
-            )
-        finally:
-            os.unlink(wav_path)
 
-    print()
-    t1.join()
-    t2.join()
+            # Use Popen so we can kill it mid-play on interrupt
+            proc = subprocess.Popen(
+                ["aplay", "-D", config.ALSA_DEVICE, wav_path],
+                stderr=subprocess.DEVNULL,
+            )
+            while proc.poll() is None:
+                if interrupt and interrupt.is_set():
+                    proc.kill()
+                    proc.wait()
+                    interrupted = True
+                    break
+                time.sleep(0.05)
+            if not interrupted:
+                proc.wait()
+        finally:
+            try:
+                os.unlink(wav_path)
+            except OSError:
+                pass
+
+        if interrupted:
+            _stop.set()
+            break
+
+    if not first:
+        print()
+
+    # Drain remaining wav files to clean up temp files
+    while True:
+        try:
+            item = wav_q.get_nowait()
+            if item is not None:
+                _, wav_path = item
+                try:
+                    os.unlink(wav_path)
+                except OSError:
+                    pass
+        except _queue.Empty:
+            break
+
+    t1.join(timeout=2)
+    t2.join(timeout=2)
+
+    return not interrupted
 
 
 # ─── Signal handlers ──────────────────────────────────────────────────────────
@@ -702,9 +880,14 @@ def main():
     print(f"Ready. Provider: {provider}  model: {model} @ {host}")
     led.pulse_ready()
 
+    skip_wait = False  # True when button press that interrupted TTS starts next recording
+
     while True:
-        print("\n[idle] Hold button to speak …")
-        button.wait_for_press()
+        if not skip_wait:
+            print("\n[idle] Hold button to speak …")
+            led.off()
+            button.wait_for_press()
+        skip_wait = False
 
         # ── Record + Transcribe (concurrent) ───────────────────────────────
         led.on()
@@ -726,11 +909,33 @@ def main():
             print(f"[tools] Injected real-time context")
 
         # ── LLM + TTS (streamed, sentence-by-sentence) ────────────────────
+        interrupt = threading.Event()
+        _tts_stop = threading.Event()
+
+        def _watch_button():
+            """Poll button state during TTS; set interrupt on press.
+
+            Polling is more reliable than when_pressed edge detection with
+            lgpio after multiple rapid interrupt/record cycles.
+            """
+            time.sleep(0.15)  # let button settle after recording release
+            while not _tts_stop.is_set():
+                if button.is_pressed:
+                    interrupt.set()
+                    return
+                time.sleep(0.05)
+
+        _watcher = threading.Thread(target=_watch_button, daemon=True)
+        _watcher.start()
         led.blink(0.3, 0.3)
         print(f"[querying {provider} + speaking]")
         t0 = time.time()
+        completed = True
         try:
-            speak_streaming(stream_llm(llm_input, history, memory_store, system_prompt))
+            completed = speak_streaming(
+                stream_llm(llm_input, history, memory_store, system_prompt, interrupt),
+                interrupt,
+            )
         except requests.exceptions.RequestException as e:
             print(f"[error] Ollama: {e}")
             try:
@@ -742,9 +947,19 @@ def main():
                 pass
         except Exception as e:
             print(f"[error] TTS: {e}")
+        finally:
+            _tts_stop.set()
+            _watcher.join(timeout=0.5)
+
         print(f"[done] {time.time()-t0:.1f}s")
 
-        led.off()
+        if not completed:
+            # Button was pressed during playback — treat as start of new recording
+            print("[interrupted] 重新录音 …")
+            led.on()
+            skip_wait = True
+        else:
+            led.off()
 
 
 if __name__ == "__main__":

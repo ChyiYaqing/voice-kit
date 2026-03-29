@@ -7,3 +7,5 @@ vosk-model/
 vosk-model-en-backup/
 memory/
 !memory/.gitkeep
+credentials/
+!credentials/auth-profiles.json.example
