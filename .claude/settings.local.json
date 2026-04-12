@@ -47,7 +47,9 @@
       "Bash(git push:*)",
       "Bash(printenv CLAUDE_CODE_OAUTH_TOKEN)",
       "Bash(python3 -c \":*)",
-      "Bash(pip install:*)"
+      "Bash(pip install:*)",
+      "Bash(git commit:*)",
+      "Bash(git tag:*)"
     ]
   }
 }

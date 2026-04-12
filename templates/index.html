@@ -1,0 +1,149 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>AI 语音助手</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+
+<div class="layout">
+
+  <!-- ── 可折叠侧边栏 ───────────────────────────────────────────── -->
+  <aside class="sidebar" id="sidebar">
+
+    <div class="sidebar-top">
+      <!-- 折叠/展开按钮 -->
+      <button class="toggle-btn" id="toggle-btn" title="折叠侧边栏">
+        <svg class="icon-collapse" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <rect x="3" y="3" width="18" height="18" rx="2"/>
+          <path d="M9 3v18"/>
+          <path d="M15 9l-3 3 3 3"/>
+        </svg>
+        <svg class="icon-expand" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="display:none">
+          <rect x="3" y="3" width="18" height="18" rx="2"/>
+          <path d="M9 3v18"/>
+          <path d="M12 9l3 3-3 3"/>
+        </svg>
+      </button>
+
+      <!-- Logo + 标题（展开时显示） -->
+      <div class="sidebar-brand">
+        <span class="logo">🎙️</span>
+        <span class="brand-text">AI 语音助手</span>
+      </div>
+    </div>
+
+    <!-- 导航 -->
+    <nav class="sidebar-nav">
+      <button class="nav-item active" data-tab="chat" data-tooltip="对话">
+        <span class="nav-icon">💬</span>
+        <span class="nav-label">对话</span>
+      </button>
+      <button class="nav-item" data-tab="logs" data-tooltip="日志">
+        <span class="nav-icon">📋</span>
+        <span class="nav-label">日志</span>
+      </button>
+      <button class="nav-item" data-tab="history" data-tooltip="历史">
+        <span class="nav-icon">🕘</span>
+        <span class="nav-label">历史</span>
+      </button>
+    </nav>
+
+    <!-- 底部状态 -->
+    <div class="sidebar-footer">
+      <span class="status-dot" id="status-dot"></span>
+      <span class="status-label" id="status-label">检测中…</span>
+    </div>
+
+  </aside>
+
+  <!-- ── 主内容区 ───────────────────────────────────────────────── -->
+  <main class="main-content">
+
+    <!-- 对话 -->
+    <section id="tab-chat" class="tab-panel active" id="chat-panel">
+
+      <!-- 欢迎态：居中标题（有消息后隐藏） -->
+      <div class="chat-hero" id="chat-hero">
+        <div class="hero-logo">🎙️</div>
+        <h1 class="hero-title">有什么我可以帮你的？</h1>
+      </div>
+
+      <!-- 消息列表（空时不占空间） -->
+      <div class="messages" id="messages"></div>
+
+      <!-- 输入卡片 -->
+      <div class="input-wrap" id="input-wrap">
+        <div class="input-card">
+          <textarea
+            id="text-input"
+            placeholder="发消息…"
+            rows="1"
+            autocomplete="off"
+          ></textarea>
+          <div class="input-toolbar">
+            <!-- 左：附加按钮（占位，可扩展） -->
+            <button class="itb-btn itb-attach" title="附件（暂不支持）" disabled>
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>
+              </svg>
+            </button>
+
+            <span class="itb-spacer"></span>
+
+            <!-- 右：语音 + 发送 -->
+            <button id="voice-btn" class="itb-btn itb-voice" title="按住说话">
+              <svg viewBox="0 0 24 24" fill="currentColor">
+                <rect x="3"  y="9" width="2" height="6" rx="1"/>
+                <rect x="7"  y="5" width="2" height="14" rx="1"/>
+                <rect x="11" y="2" width="2" height="20" rx="1"/>
+                <rect x="15" y="5" width="2" height="14" rx="1"/>
+                <rect x="19" y="9" width="2" height="6" rx="1"/>
+              </svg>
+            </button>
+            <button id="send-btn" class="itb-btn itb-send" title="发送（Enter）">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"
+                   stroke-linecap="round" stroke-linejoin="round">
+                <path d="M12 19V5M5 12l7-7 7 7"/>
+              </svg>
+            </button>
+          </div>
+        </div>
+        <p class="input-hint">Enter 发送 · Shift+Enter 换行 · 按住语音键说话</p>
+      </div>
+
+    </section>
+
+    <!-- 日志 -->
+    <section id="tab-logs" class="tab-panel">
+      <div class="log-toolbar">
+        <label class="chk-label">
+          <input type="checkbox" id="auto-scroll" checked>自动滚动
+        </label>
+        <button id="clear-logs" class="toolbar-btn">清空</button>
+        <span id="log-status" class="log-status">● 连接中…</span>
+      </div>
+      <div class="log-body" id="log-body"></div>
+    </section>
+
+    <!-- 历史 -->
+    <section id="tab-history" class="tab-panel">
+      <div class="history-toolbar">
+        <span id="history-count" class="history-count"></span>
+        <button id="refresh-history" class="toolbar-btn">刷新</button>
+      </div>
+      <div class="load-more-row">
+        <button id="load-more" class="load-more-btn" style="display:none">↑ 加载更早消息</button>
+      </div>
+      <div class="history-body" id="history-body"></div>
+    </section>
+
+  </main>
+
+</div><!-- .layout -->
+
+<script src="/static/app.js"></script>
+</body>
+</html>

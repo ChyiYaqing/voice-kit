@@ -5,6 +5,7 @@ __pycache__/
 *.pyc
 vosk-model/
 vosk-model-en-backup/
+sherpa-model/
 memory/
 !memory/.gitkeep
 credentials/
