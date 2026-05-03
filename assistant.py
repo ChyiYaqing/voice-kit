@@ -782,7 +782,8 @@ def main():
         num_threads=2,
         sample_rate=config.SAMPLE_RATE,
         feature_dim=80,
-        decoding_method="greedy_search",
+        decoding_method="modified_beam_search",
+        max_active_paths=4,
     )
 
     button = Button(config.BUTTON_PIN, pull_up=True)

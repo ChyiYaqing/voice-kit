@@ -340,6 +340,7 @@ systemd 服务下 Python stdout 默认缓冲，导致日志延迟。服务文件
 ### STT 语言模型
 
 - **当前**：`sherpa-onnx-streaming-zipformer-bilingual-zh-en-2023-02-20`（中英双语，int8，encoder ~174 MB，总计 ~190 MB）
+- **解码**：`modified_beam_search`（`max_active_paths=4`）— 比 `greedy_search` 在快速重复音节（如「测试测试测试」）上更稳定，CPU 成本约 +30%
 - **优势**：词级 token 输出，支持中英混合识别（如「苹果 iPhone」）；不会把复合词切成独立字符
 - **注意**：Pi 3B (1 GB RAM) 模型加载约需 75s；避免使用超过 200 MB 的模型
 

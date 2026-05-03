@@ -91,7 +91,8 @@ STT: sherpa-onnx (offline, streaming-zipformer-bilingual-zh-en-2023-02-20, int8)
 - Model load time on Pi 3B: ~75s at startup (encoder size); do not use models >200 MB
 - STT chunk size: `4000` bytes (0.125s/chunk at 16kHz S16_LE) — converted to float32 before feeding to sherpa-onnx
 - sherpa-onnx outputs word-level tokens, correctly handles compounds (苹果公司) and English words (iPhone, IPHONE)
-- `bpe.model` is present in sherpa-model/ but not passed to recognizer (greedy_search uses tokens.txt directly)
+- `bpe.model` is present in sherpa-model/ but not passed to recognizer (decoder uses tokens.txt directly)
+- Decoding: `modified_beam_search` with `max_active_paths=4` — more accurate than `greedy_search` on rapid-repeat utterances (e.g. "测试测试测试"), at ~30% CPU cost vs greedy. Greedy was prone to duplicating tokens at chunk boundaries on tight syllable repetition.
 - aplay must use `-D plughw:sndrpigooglevoi,0` — default ALSA routing is unreliable due to conflicting card index in `/etc/asound.conf`
 - Conversation history now persisted to disk (see Memory System below)
 - ffmpeg is available at `/usr/bin/ffmpeg` (system package)
