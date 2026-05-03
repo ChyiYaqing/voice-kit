@@ -11,3 +11,4 @@ memory/
 credentials/
 !credentials/auth-profiles.json.example
 models/
+.claude/
