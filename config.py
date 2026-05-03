@@ -16,12 +16,21 @@ OLLAMA_MODEL    = os.environ.get("OLLAMA_MODEL",    "gemma3:4b")
 OLLAMA_USERNAME = os.environ.get("OLLAMA_USERNAME", "")
 OLLAMA_PASSWORD = os.environ.get("OLLAMA_PASSWORD", "")
 OLLAMA_TIMEOUT  = int(os.environ.get("OLLAMA_TIMEOUT", "60"))
+OLLAMA_KEEP_ALIVE = os.environ.get("OLLAMA_KEEP_ALIVE", "30m")
+OLLAMA_NUM_PREDICT = int(os.environ.get("OLLAMA_NUM_PREDICT", "160"))
+
+# Smaller chunks reduce first-token latency for requests.iter_lines().
+LLM_STREAM_CHUNK_SIZE = int(os.environ.get("LLM_STREAM_CHUNK_SIZE", "1"))
+
+# Keep voice turns responsive by bounding prompt growth from persisted history.
+LLM_CONTEXT_MAX_CHARS = int(os.environ.get("LLM_CONTEXT_MAX_CHARS", "12000"))
 
 # ─── DeepSeek API ─────────────────────────────────────────────────────────────
 DEEPSEEK_API_KEY = os.environ.get("DEEPSEEK_API_KEY", "")
 DEEPSEEK_HOST    = os.environ.get("DEEPSEEK_HOST",    "https://api.deepseek.com")
 DEEPSEEK_MODEL   = os.environ.get("DEEPSEEK_MODEL",   "deepseek-chat")
 DEEPSEEK_TIMEOUT = int(os.environ.get("DEEPSEEK_TIMEOUT", "60"))
+DEEPSEEK_MAX_TOKENS = int(os.environ.get("DEEPSEEK_MAX_TOKENS", "256"))
 
 # ─── Anthropic Claude API ─────────────────────────────────────────────────────
 # Auth priority (highest to lowest):
@@ -35,7 +44,7 @@ DEEPSEEK_TIMEOUT = int(os.environ.get("DEEPSEEK_TIMEOUT", "60"))
 ANTHROPIC_API_KEY    = os.environ.get("ANTHROPIC_API_KEY",    "")
 ANTHROPIC_HOST       = os.environ.get("ANTHROPIC_HOST",       "https://api.anthropic.com")
 ANTHROPIC_MODEL      = os.environ.get("ANTHROPIC_MODEL",      "claude-sonnet-4-6")
-ANTHROPIC_MAX_TOKENS = int(os.environ.get("ANTHROPIC_MAX_TOKENS", "1024"))
+ANTHROPIC_MAX_TOKENS = int(os.environ.get("ANTHROPIC_MAX_TOKENS", "256"))
 ANTHROPIC_TIMEOUT    = int(os.environ.get("ANTHROPIC_TIMEOUT", "60"))
 # Path to OAuth credentials file (gitignored; override via env var if needed)
 ANTHROPIC_OAUTH_CREDENTIALS = os.environ.get(
@@ -70,10 +79,34 @@ SAMPLE_RATE   = 16000   # Vosk requires 16 kHz
 CHANNELS      = 1
 SAMPLE_FORMAT = "S16_LE"
 
-# TTS (edge-tts — Microsoft neural voices)
+# TTS engine: "edge" (Microsoft Neural, online), "piper" (offline), or "espeak"
+TTS_ENGINE = os.environ.get("TTS_ENGINE", "edge").lower()
+
+# edge-tts (Microsoft Neural TTS — zh-CN-XiaoxiaoNeural etc.)
 TTS_VOICE  = os.environ.get("TTS_VOICE",  "zh-CN-XiaoxiaoNeural")
 TTS_RATE   = os.environ.get("TTS_RATE",   "+0%")
-TTS_VOLUME = os.environ.get("TTS_VOLUME", "-90%")
+TTS_VOLUME = os.environ.get("TTS_VOLUME", "+0%")
+
+# Piper (offline fallback)
+PIPER_BIN = os.environ.get(
+    "PIPER_BIN",
+    os.path.join(os.path.dirname(__file__), ".venv", "bin", "piper")
+)
+PIPER_MODEL = os.environ.get(
+    "PIPER_MODEL",
+    os.path.join(os.path.dirname(__file__), "models", "piper", "zh_CN-huayan-medium.onnx")
+)
+PIPER_CONFIG = os.environ.get("PIPER_CONFIG", PIPER_MODEL + ".json")
+PIPER_VOLUME = float(os.environ.get("PIPER_VOLUME", "0.2"))
+
+LOCAL_TTS_VOICE     = os.environ.get("LOCAL_TTS_VOICE", "cmn")
+LOCAL_TTS_SPEED     = int(os.environ.get("LOCAL_TTS_SPEED", "175"))
+LOCAL_TTS_AMPLITUDE = int(os.environ.get("LOCAL_TTS_AMPLITUDE", "20"))
+
+# TTS segmentation. The first segment is intentionally short so playback can
+# start before the model has produced a full sentence-ending punctuation mark.
+TTS_FIRST_CHUNK_CHARS = int(os.environ.get("TTS_FIRST_CHUNK_CHARS", "18"))
+TTS_CHUNK_CHARS       = int(os.environ.get("TTS_CHUNK_CHARS", "36"))
 
 # ─── GPIO  (AIY Voice Kit V1) ────────────────────────────────────────────────
 BUTTON_PIN = int(os.environ.get("BUTTON_PIN", "23"))

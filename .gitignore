@@ -10,3 +10,4 @@ memory/
 !memory/.gitkeep
 credentials/
 !credentials/auth-profiles.json.example
+models/

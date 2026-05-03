@@ -2,11 +2,12 @@
 """
 AI Voice Assistant — AIY Voice Kit V1 + Ollama (Mac Mini M4)
 
-Flow: hold button → record → sherpa-onnx STT → Ollama LLM → edge-tts TTS → play
+Flow: hold button → record → sherpa-onnx STT → LLM → local TTS → play
 LED:  idle=off  recording=on  processing=fast-blink  speaking=slow-blink
 """
 
 import asyncio
+import contextlib
 import json
 import os
 import re
@@ -16,9 +17,9 @@ import sys
 import tempfile
 import threading
 import time
+import wave
 
 import numpy as np
-import edge_tts
 import requests
 import sherpa_onnx
 from gpiozero import Button, PWMLED
@@ -132,14 +133,73 @@ _SENTENCE_END = re.compile(r'[。！？!?]+|(?<=[^0-9])\.(?=\s|$)|，(?=.{20,})'
 
 # Markdown patterns to strip before TTS
 _MARKDOWN = re.compile(r'[*#`_~>]|\[|\]|\(|\)')
+_SOFT_TTS_BOUNDARY = re.compile(r'[，,；;、\n]\s*')
+
+
+def _trim_text(text: str, max_chars: int) -> str:
+    """Keep the tail of long context blocks; recent details are usually hotter."""
+    if not text or max_chars <= 0 or len(text) <= max_chars:
+        return text
+    return text[-max_chars:]
+
+
+def _trim_history_for_llm(history: list, max_chars: int = None) -> list:
+    """Keep recent chat messages within a rough character budget."""
+    max_chars = max_chars or config.LLM_CONTEXT_MAX_CHARS
+    if max_chars <= 0:
+        kept = history
+    else:
+        kept = []
+        used = 0
+        for msg in reversed(history):
+            content = msg.get("content", "")
+            cost = len(content)
+            if kept and used + cost > max_chars:
+                break
+            kept.append(msg)
+            used += cost
+        kept.reverse()
+
+    messages = [
+        {"role": msg["role"], "content": msg.get("content", "")}
+        for msg in kept
+        if msg.get("role") in ("user", "assistant") and msg.get("content")
+    ]
+    while messages and messages[0]["role"] == "assistant":
+        messages.pop(0)
+    return messages
+
+
+def _pop_tts_segment(buf: str, first: bool) -> tuple[str | None, str]:
+    """Return a speakable segment as soon as enough text is available."""
+    m = _SENTENCE_END.search(buf)
+    if m:
+        return buf[:m.end()], buf[m.end():]
+
+    limit = config.TTS_FIRST_CHUNK_CHARS if first else config.TTS_CHUNK_CHARS
+    if len(buf) < limit:
+        return None, buf
+
+    soft_end = None
+    for match in _SOFT_TTS_BOUNDARY.finditer(buf[:limit + 8]):
+        soft_end = match.end()
+    if soft_end and soft_end >= max(8, limit // 2):
+        return buf[:soft_end], buf[soft_end:]
+
+    return buf[:limit], buf[limit:]
 
 def _stream_ollama(history: list, system_prompt: str = None):
     """Stream from Ollama; yield text chunks."""
     sys_prompt = system_prompt if system_prompt is not None else config.SYSTEM_PROMPT
+    messages = _trim_history_for_llm(history)
     payload = {
         "model": config.OLLAMA_MODEL,
-        "messages": [{"role": "system", "content": sys_prompt}] + history,
+        "messages": [{"role": "system", "content": sys_prompt}] + messages,
         "stream": True,
+        "keep_alive": config.OLLAMA_KEEP_ALIVE,
+        "options": {
+            "num_predict": config.OLLAMA_NUM_PREDICT,
+        },
     }
     resp = requests.post(
         f"{config.OLLAMA_HOST}/api/chat",
@@ -150,7 +210,7 @@ def _stream_ollama(history: list, system_prompt: str = None):
     )
     resp.raise_for_status()
 
-    for line in resp.iter_lines():
+    for line in resp.iter_lines(chunk_size=config.LLM_STREAM_CHUNK_SIZE):
         if not line:
             continue
         data = json.loads(line)
@@ -164,10 +224,12 @@ def _stream_ollama(history: list, system_prompt: str = None):
 def _stream_deepseek(history: list, system_prompt: str = None):
     """Stream from DeepSeek (OpenAI-compatible SSE); yield text chunks."""
     sys_prompt = system_prompt if system_prompt is not None else config.SYSTEM_PROMPT
+    messages = _trim_history_for_llm(history)
     payload = {
         "model": config.DEEPSEEK_MODEL,
-        "messages": [{"role": "system", "content": sys_prompt}] + history,
+        "messages": [{"role": "system", "content": sys_prompt}] + messages,
         "stream": True,
+        "max_tokens": config.DEEPSEEK_MAX_TOKENS,
     }
     headers = {
         "Authorization": f"Bearer {config.DEEPSEEK_API_KEY}",
@@ -185,7 +247,7 @@ def _stream_deepseek(history: list, system_prompt: str = None):
         print(f"[DeepSeek] HTTP {resp.status_code}: {body}", flush=True)
         raise RuntimeError(f"DeepSeek {resp.status_code}: {body}")
 
-    for line in resp.iter_lines():
+    for line in resp.iter_lines(chunk_size=config.LLM_STREAM_CHUNK_SIZE):
         if not line:
             continue
         text = line.decode("utf-8") if isinstance(line, bytes) else line
@@ -229,7 +291,7 @@ def _stream_claude(history: list, system_prompt: str = None):
     """
     sys_prompt = system_prompt if system_prompt is not None else config.SYSTEM_PROMPT
     # Claude API: system is a top-level param, messages must be user/assistant only
-    messages = [m for m in history if m["role"] in ("user", "assistant") and m.get("content")]
+    messages = _trim_history_for_llm(history)
 
     oauth_token = _load_claude_oauth_token()
     if oauth_token:
@@ -264,7 +326,7 @@ def _stream_claude(history: list, system_prompt: str = None):
         print(f"[Claude] HTTP {resp.status_code}: {body}", flush=True)
         raise RuntimeError(f"Claude {resp.status_code}: {body}")
 
-    for line in resp.iter_lines():
+    for line in resp.iter_lines(chunk_size=config.LLM_STREAM_CHUNK_SIZE):
         if not line:
             continue
         text = line.decode("utf-8") if isinstance(line, bytes) else line
@@ -529,36 +591,123 @@ def _apply_bootstrap_updates(memory_store: MemoryStore, updates: dict):
 
 import queue as _queue
 
+_piper_voice = None
+_piper_lock = threading.Lock()
+
+
+@contextlib.contextmanager
+def _suppress_native_output():
+    """Suppress Python and native library stdout/stderr for noisy TTS deps."""
+    sys.stdout.flush()
+    sys.stderr.flush()
+    old_stdout = os.dup(1)
+    old_stderr = os.dup(2)
+    try:
+        with open(os.devnull, "w") as devnull:
+            os.dup2(devnull.fileno(), 1)
+            os.dup2(devnull.fileno(), 2)
+            yield
+    finally:
+        os.dup2(old_stdout, 1)
+        os.dup2(old_stderr, 2)
+        os.close(old_stdout)
+        os.close(old_stderr)
+
+
+def _get_piper_voice():
+    """Lazy-load Piper once and reuse the ONNX session for all TTS segments."""
+    global _piper_voice
+    if _piper_voice is not None:
+        return _piper_voice
+
+    with _piper_lock:
+        if _piper_voice is None:
+            with _suppress_native_output():
+                from piper import PiperVoice
+
+                _piper_voice = PiperVoice.load(
+                    config.PIPER_MODEL,
+                    config_path=config.PIPER_CONFIG,
+                    use_cuda=False,
+                )
+        return _piper_voice
+
+def _synth_edge_tts(text: str, wav_path: str) -> None:
+    """Synthesise text via Microsoft edge-tts Neural TTS, convert MP3→WAV with ffmpeg."""
+    import asyncio
+    import edge_tts
+
+    mp3_path = wav_path[:-4] + ".mp3"
+    try:
+        async def _gen():
+            communicate = edge_tts.Communicate(
+                text,
+                config.TTS_VOICE,
+                rate=config.TTS_RATE,
+                volume=config.TTS_VOLUME,
+            )
+            await communicate.save(mp3_path)
+
+        asyncio.run(_gen())
+        # mpg123 decodes MP3→WAV in ~60ms on Pi 3B; ffmpeg takes 20+ seconds.
+        subprocess.run(
+            ["mpg123", "-q", "-w", wav_path, mp3_path],
+            check=True,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+    finally:
+        try:
+            os.unlink(mp3_path)
+        except OSError:
+            pass
+
+
 def _synth_to_wav(text: str) -> str:
-    """Synthesise text → WAV file via edge-tts + ffmpeg. Returns WAV path."""
-    mp3 = tempfile.NamedTemporaryFile(suffix=".mp3", delete=False)
-    mp3.close()
+    """Synthesise text to a local WAV file. Returns WAV path."""
     wav = tempfile.NamedTemporaryFile(suffix=".wav", delete=False)
     wav.close()
     try:
-        async def _run():
-            communicate = edge_tts.Communicate(
-                text, config.TTS_VOICE,
-                rate=config.TTS_RATE, volume=config.TTS_VOLUME,
+        if config.TTS_ENGINE == "edge":
+            _synth_edge_tts(text, wav.name)
+        elif config.TTS_ENGINE == "piper":
+            with _suppress_native_output():
+                from piper import SynthesisConfig
+
+                voice = _get_piper_voice()
+                syn_config = SynthesisConfig(volume=config.PIPER_VOLUME)
+            with wave.open(wav.name, "wb") as wav_file:
+                with _suppress_native_output():
+                    voice.synthesize_wav(text, wav_file, syn_config=syn_config)
+        else:
+            subprocess.run(
+                [
+                    "espeak-ng",
+                    "-v", config.LOCAL_TTS_VOICE,
+                    "-s", str(config.LOCAL_TTS_SPEED),
+                    "-a", str(config.LOCAL_TTS_AMPLITUDE),
+                    "-w", wav.name,
+                    text,
+                ],
+                check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
             )
-            await communicate.save(mp3.name)
-        asyncio.run(_run())
-        subprocess.run(
-            ["ffmpeg", "-y", "-i", mp3.name, "-ar", "16000", "-ac", "1", wav.name],
-            check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-        )
         return wav.name
-    finally:
-        os.unlink(mp3.name)
+    except Exception:
+        try:
+            os.unlink(wav.name)
+        except OSError:
+            pass
+        raise
 
 
-def speak_streaming(text_stream, interrupt: threading.Event = None):
+def speak_streaming(text_stream, interrupt: threading.Event = None, t0: float = None):
     """
     3-stage pipeline:
       Thread-1 (LLM reader)  : reads stream → splits sentences → sentence_q
-      Thread-2 (synthesiser) : sentence_q  → edge-tts+ffmpeg → wav_q
+      Thread-2 (synthesiser) : sentence_q  → local TTS WAV → wav_q
       Main thread (player)   : wav_q       → aplay (plays while next is synthesising)
 
+    t0: query start time (from time.time()) for milestone logging; omit to skip.
     Returns True if completed normally, False if interrupted by button press.
     """
     sentence_q: _queue.Queue = _queue.Queue(maxsize=4)
@@ -568,19 +717,25 @@ def speak_streaming(text_stream, interrupt: threading.Event = None):
     # ── Thread 1: LLM → sentences ────────────────────────────────────────────
     def llm_reader():
         buf = ""
+        first_segment = True
+        first_token = True
         try:
             for chunk in text_stream:
                 if _stop.is_set():
                     break
+                if first_token and chunk.strip():
+                    if t0 is not None:
+                        print(f"[first token] {time.time()-t0:.2f}s", flush=True)
+                    first_token = False
                 buf += chunk
                 while True:
-                    m = _SENTENCE_END.search(buf)
-                    if not m:
+                    segment, buf = _pop_tts_segment(buf, first_segment)
+                    if segment is None:
                         break
-                    sentence = _MARKDOWN.sub("", buf[:m.end()]).strip()
-                    buf = buf[m.end():]
+                    sentence = _MARKDOWN.sub("", segment).strip()
                     if sentence:
                         sentence_q.put(sentence)
+                        first_segment = False
         finally:
             if not _stop.is_set():
                 tail = _MARKDOWN.sub("", buf).strip()
@@ -645,6 +800,8 @@ def speak_streaming(text_stream, interrupt: threading.Event = None):
         sentence, wav_path = item
         try:
             if first:
+                if t0 is not None:
+                    print(f"[first audio] {time.time()-t0:.2f}s", flush=True)
                 print(f"AI  : {sentence}", end="", flush=True)
                 first = False
             else:
@@ -730,6 +887,11 @@ def build_system_prompt(soul: str = "", identity: str = "", user: str = "", memo
         Complete system prompt with all Bootstrap context
     """
     parts = []
+    max_chars = config.BOOTSTRAP_MAX_CHARS
+    soul = _trim_text(soul, max_chars)
+    identity = _trim_text(identity, max_chars)
+    user = _trim_text(user, max_chars)
+    memory = _trim_text(memory, max_chars)
 
     # ── 1. SOUL.md (Core Personality) ────────────────────────────────────────
     if soul:
@@ -879,6 +1041,13 @@ def main():
     model = config.DEEPSEEK_MODEL if provider == "deepseek" else config.OLLAMA_MODEL
     host  = config.DEEPSEEK_HOST  if provider == "deepseek" else config.OLLAMA_HOST
     print(f"Ready. Provider: {provider}  model: {model} @ {host}")
+    if config.TTS_ENGINE == "edge":
+        print(f"[tts] engine=edge-tts  voice={config.TTS_VOICE}  rate={config.TTS_RATE}  vol={config.TTS_VOLUME}")
+    elif config.TTS_ENGINE == "piper":
+        print("[tts] Loading Piper voice …")
+        tts_t0 = time.time()
+        _get_piper_voice()
+        print(f"[tts] Piper ready ({time.time()-tts_t0:.1f}s)")
     led.pulse_ready()
 
     skip_wait = False  # True when button press that interrupted TTS starts next recording
@@ -936,6 +1105,7 @@ def main():
             completed = speak_streaming(
                 stream_llm(llm_input, history, memory_store, system_prompt, interrupt),
                 interrupt,
+                t0=t0,
             )
         except requests.exceptions.RequestException as e:
             print(f"[error] Ollama: {e}")

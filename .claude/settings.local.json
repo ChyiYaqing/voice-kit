@@ -49,7 +49,16 @@
       "Bash(python3 -c \":*)",
       "Bash(pip install:*)",
       "Bash(git commit:*)",
-      "Bash(git tag:*)"
+      "Bash(git tag:*)",
+      "Bash(mpg123 --version)",
+      "Bash(git reset *)",
+      "Bash(cp assistant.py /tmp/assistant.py.session)",
+      "Bash(cp CLAUDE.md /tmp/CLAUDE.md.session)",
+      "Bash(cp README.md /tmp/README.md.session)",
+      "Bash(git checkout *)",
+      "Bash(cp /tmp/assistant.py.session assistant.py)",
+      "Bash(cp /tmp/CLAUDE.md.session CLAUDE.md)",
+      "Bash(cp /tmp/README.md.session README.md)"
     ]
   }
 }

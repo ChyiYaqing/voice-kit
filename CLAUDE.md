@@ -3,7 +3,7 @@
 ## Project Overview
 
 Raspberry Pi 3B + AIY Google Voice Kit V1 voice assistant.
-STT: sherpa-onnx (offline, streaming-zipformer-bilingual-zh-en-2023-02-20, int8). LLM: Ollama on remote Mac Mini M4. TTS: edge-tts (Microsoft neural, Chinese female).
+STT: sherpa-onnx (offline, streaming-zipformer-bilingual-zh-en-2023-02-20, int8). LLM: Ollama/DeepSeek/Claude. TTS: edge-tts (Microsoft Neural, online, default) with Piper/espeak-ng offline fallback.
 
 ## Key Files
 
@@ -44,25 +44,35 @@ STT: sherpa-onnx (offline, streaming-zipformer-bilingual-zh-en-2023-02-20, int8)
 - No extra SDK needed — implemented with `requests` directly
 - Fallback: errors automatically fall back to Ollama (same as DeepSeek)
 
-## TTS (edge-tts)
+## TTS
 
-- Voice: `zh-CN-XiaoxiaoNeural` (Mandarin Chinese female, Microsoft neural)
-- Pipeline: **3-stage threaded**:
-  - Thread 1: LLM stream → sentence splitter → `sentence_q`
-  - Thread 2: `sentence_q` → edge-tts + ffmpeg → `wav_q` (synthesises next while current plays)
-  - Main thread: `wav_q` → aplay (via `Popen`; killed immediately on interrupt)
+Three engines, set via `TTS_ENGINE` in `.env`:
+
+| Engine | Quality | Requires network | Config params |
+|--------|---------|-----------------|---------------|
+| `edge` (default) | Best — Microsoft Neural | Yes | `TTS_VOICE`, `TTS_RATE`, `TTS_VOLUME` |
+| `piper` | Good — offline ONNX | No | `PIPER_MODEL`, `PIPER_VOLUME` |
+| `espeak` | Basic | No | `LOCAL_TTS_VOICE`, `LOCAL_TTS_SPEED`, `LOCAL_TTS_AMPLITUDE` |
+
+**edge-tts details:**
+- Default voice: `zh-CN-XiaoxiaoNeural` (Microsoft Neural, Mandarin Chinese female)
+- Other Chinese female voices: `zh-CN-XiaochenNeural`, `zh-CN-XiaohanNeural`, `zh-CN-XiaomoNeural`
+- Output: edge-tts → MP3 → `mpg123 -w` converts to WAV (~60ms on Pi 3B) → `aplay`
+- `mpg123` must be installed: `sudo apt install mpg123` (do NOT use ffmpeg — takes 20+ s on Pi 3B ARM)
+
+**Pipeline: 3-stage threaded**:
+- Thread 1: LLM stream → sentence splitter → `sentence_q`
+- Thread 2: `sentence_q` → TTS WAV → `wav_q` (synthesises next while current plays)
+- Main thread: `wav_q` → aplay (via `Popen`; killed immediately on interrupt)
 - **Interrupt**: button press during playback detected by polling thread (`_watch_button`, checks `button.is_pressed` every 50ms) → sets `interrupt` event → aplay killed within 50ms → LLM/synth threads wind down via `_stop` event → returns to recording immediately
 - **Why polling not `when_pressed`**: lgpio edge-detection gets unreliable after multiple rapid interrupt/record cycles; polling `button.is_pressed` is always stable
 - Sentence boundaries: `。！？!?.` and `，` (when followed by 20+ chars)
 - Markdown stripped before TTS (`* # `` _ ~ > [ ] ( )`)
-- Requires internet (same as Ollama)
-- Config params: `TTS_VOICE`, `TTS_RATE` (e.g. `"+10%"`), `TTS_VOLUME` (e.g. `"-70%"`)
-- Other Chinese female voices: `zh-CN-XiaochenNeural`, `zh-CN-XiaohanNeural`
 
 ## Python Environment
 
 - Venv: `.venv/` (Python 3.13)
-- Key packages: `sherpa-onnx`, `numpy`, `requests`, `gpiozero`, `edge-tts`
+- Key packages: `sherpa-onnx`, `numpy`, `requests`, `gpiozero`, `piper-tts==1.3.0`, `onnxruntime==1.23.2`; system package `espeak-ng`
 - Activate: `source .venv/bin/activate`
 - **RPi.GPIO**: do NOT use pip's `RPi.GPIO` (0.7.1 — broken on Linux 6.12+). Instead, symlink
   system's `python3-rpi-lgpio` (0.7.2) into the venv:

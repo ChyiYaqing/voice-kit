@@ -242,9 +242,16 @@ async def status():
         active = out.decode().strip() == "active"
     except Exception:
         active = False
+    provider = config.LLM_PROVIDER.lower()
+    if provider == "deepseek":
+        model = config.DEEPSEEK_MODEL
+    elif provider == "claude":
+        model = config.ANTHROPIC_MODEL
+    else:
+        model = config.OLLAMA_MODEL
     return {"voice_service": "active" if active else "inactive",
             "llm_provider": config.LLM_PROVIDER,
-            "model": config.OLLAMA_MODEL}
+            "model": model}
 
 
 if __name__ == "__main__":

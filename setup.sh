@@ -23,7 +23,9 @@ pip install -q \
     numpy \
     requests \
     gpiozero \
-    RPi.GPIO
+    RPi.GPIO \
+    piper-tts==1.3.0 \
+    onnxruntime==1.23.2
 
 echo "=== 3. Download sherpa-onnx streaming-zipformer-zh-14M (~25 MB) ==="
 MODEL_DIR="$SCRIPT_DIR/sherpa-model"
@@ -38,6 +40,24 @@ if [ ! -d "$MODEL_DIR" ]; then
     echo "sherpa-onnx model saved to $MODEL_DIR"
 else
     echo "sherpa-onnx model already present — skipping."
+fi
+
+echo "=== 4. Download Piper Chinese voice (~21 MB) ==="
+PIPER_DIR="$SCRIPT_DIR/models/piper"
+mkdir -p "$PIPER_DIR"
+if [ ! -f "$PIPER_DIR/zh_CN-huayan-x_low.onnx" ]; then
+    wget -q --show-progress \
+        "https://huggingface.co/rhasspy/piper-voices/resolve/main/zh/zh_CN/huayan/x_low/zh_CN-huayan-x_low.onnx" \
+        -O "$PIPER_DIR/zh_CN-huayan-x_low.onnx"
+else
+    echo "Piper ONNX model already present — skipping."
+fi
+if [ ! -f "$PIPER_DIR/zh_CN-huayan-x_low.onnx.json" ]; then
+    wget -q --show-progress \
+        "https://huggingface.co/rhasspy/piper-voices/resolve/main/zh/zh_CN/huayan/x_low/zh_CN-huayan-x_low.onnx.json" \
+        -O "$PIPER_DIR/zh_CN-huayan-x_low.onnx.json"
+else
+    echo "Piper config already present — skipping."
 fi
 
 echo ""

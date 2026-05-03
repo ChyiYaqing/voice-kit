@@ -1,6 +1,6 @@
 # AI Voice Assistant — AIY Voice Kit V1
 
-Raspberry Pi 3B + Google AIY Voice Kit V1 语音助手，支持离线 sherpa-onnx 语音识别、LLM 对话（Ollama 或 DeepSeek API）和 edge-tts 中文女声合成。
+Raspberry Pi 3B + Google AIY Voice Kit V1 语音助手，支持离线 sherpa-onnx 语音识别、LLM 对话（Ollama 或 DeepSeek API）和本地 Piper 语音合成。
 
 ## 硬件
 
@@ -13,7 +13,7 @@ Raspberry Pi 3B + Google AIY Voice Kit V1 语音助手，支持离线 sherpa-onn
 ## 架构
 
 ```
-[按住按键] → arecord → sherpa-onnx STT → 实时工具注入 → LLM (流式) → edge-tts+ffmpeg → aplay → [听到回复]
+[按住按键] → arecord → sherpa-onnx STT → 实时工具注入 → LLM (流式) → Piper → aplay → [听到回复]
                                       (时间/天气)    ↓ 逐句合成，三级流水线并行播放
 ```
 
@@ -22,7 +22,7 @@ Raspberry Pi 3B + Google AIY Voice Kit V1 语音助手，支持离线 sherpa-onn
 | STT | [sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx) `streaming-zipformer-bilingual-zh-en` | 离线，~190 MB，Pi 3B 可运行，中英双语，词级识别 |
 | 工具 | `tools.py` 实时注入 | 时间、天气查询，无需额外 LLM 调用 |
 | LLM | **Ollama**、**DeepSeek API** 或 **Anthropic Claude** | 三种方式可选（见配置） |
-| TTS | edge-tts `zh-CN-XiaoxiaoNeural` | 微软神经语音，中文女声，需联网 |
+| TTS | **edge-tts** `zh-CN-XiaoxiaoNeural` | 微软神经网络 TTS（最自然）；Piper 离线 / espeak-ng 可作 fallback |
 | GPIO | gpiozero + lgpio | 按住录音，LED 状态指示（兼容 Linux 6.12+） |
 
 ### LLM 提供商
@@ -45,12 +45,22 @@ Raspberry Pi 3B + Google AIY Voice Kit V1 语音助手，支持离线 sherpa-onn
   2. **API Key**（备选）：从 console.anthropic.com 获取 `sk-ant-api03-...`
 - 无需额外安装 SDK（直接使用 `requests`）
 
+### TTS 引擎
+
+| 引擎 | 效果 | 是否需要网络 | 配置 |
+|------|------|------------|------|
+| `edge`（默认）| 最佳，微软神经 TTS | 是 | `TTS_VOICE`, `TTS_RATE`, `TTS_VOLUME` |
+| `piper` | 较好，离线 ONNX | 否 | `PIPER_MODEL`, `PIPER_VOLUME` |
+| `espeak` | 基础 | 否 | `LOCAL_TTS_VOICE`, `LOCAL_TTS_SPEED` |
+
+edge-tts 流程：`edge-tts → MP3 → ffmpeg → 16kHz WAV → aplay`
+
 ### TTS 三级流水线
 
 ```
 Thread-1 (LLM 读取): LLM 流式输出 → 分句边界检测 → sentence_q
-Thread-2 (合成器):   sentence_q → edge-tts+ffmpeg → wav_q  (合成下一句)
-主线程 (播放器):     wav_q → aplay                          (播放当前句)
+Thread-2 (合成器):   sentence_q → TTS WAV → wav_q (合成下一句)
+主线程 (播放器):     wav_q → aplay            (播放当前句)
 ```
 
 **工作原理：**
@@ -360,7 +370,7 @@ bash setup.sh
 
 脚本会自动完成：
 - 创建 Python 3.13 venv (`.venv/`)
-- 安装依赖：`sherpa-onnx`, `numpy`, `requests`, `gpiozero`, `edge-tts`, `python-dotenv`
+- 安装依赖：`sherpa-onnx`, `numpy`, `requests`, `gpiozero`, `python-dotenv`
 - 下载 sherpa-onnx 中英双语模型（int8，~190 MB）
 - 链接系统 `python3-rpi-lgpio` 到 venv（Linux 6.12+ 兼容）
 - 安装 ffmpeg（TTS 音频转换需要）
@@ -493,15 +503,13 @@ export ANTHROPIC_TIMEOUT=60               # 可选，默认 60 秒
 通过环境变量或 `config.py` 调整：
 
 ```bash
-export TTS_VOICE="zh-CN-XiaoxiaoNeural"  # 语音选择
-export TTS_RATE="+0%"                     # 语速："+10%" 加速，"-10%" 减速
-export TTS_VOLUME="-90%"                  # 音量："-70%" 降低
+export LOCAL_TTS_VOICE="cmn"        # 普通话；也可试 zh、yue
+export LOCAL_TTS_SPEED=175          # 语速，数值越大越快
+export LOCAL_TTS_AMPLITUDE=100      # 音量，0-200
+export PIPER_VOLUME=0.2             # Piper 输出音量，0.2 约等于 20%
 ```
 
-**其他可用中文女声：**
-- `zh-CN-XiaoxiaoNeural` （晓晓，默认）
-- `zh-CN-XiaochenNeural` （晓辰）
-- `zh-CN-XiaohanNeural`  （晓涵）
+Piper 不依赖网络，中文音质比 espeak-ng 自然。Pi 3B 上启动时会预加载模型，后续短句通常在 1-2 秒内合成。
 
 ## Systemd 服务管理
 
@@ -640,5 +648,6 @@ MIT License
 - [sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx) - 离线流式语音识别
 - [Ollama](https://ollama.ai/) - 本地 LLM 部署
 - [DeepSeek](https://www.deepseek.com/) - DeepSeek API
-- [edge-tts](https://github.com/rany2/edge-tts) - 微软 TTS 接口
+- [Piper](https://github.com/rhasspy/piper) - 本地神经 TTS
+- [espeak-ng](https://github.com/espeak-ng/espeak-ng) - 本地离线 TTS fallback
 - Google AIY Voice Kit V1 - 硬件平台
